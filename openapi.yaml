@@ -1,0 +1,406 @@
+openapi: 3.1.0
+info:
+  title: Gearline Equipment Reservation API
+  version: 0.1.0
+  description: |
+    Portfolio demo API for reserving individually tracked workplace equipment.
+    Development sign-in is available only when APP_ENV=development and DEMO_AUTH_ENABLED=true.
+servers:
+  - url: /
+tags:
+  - name: Authentication
+  - name: Equipment
+  - name: Reservations
+  - name: Audit
+paths:
+  /api/health:
+    get:
+      tags: [Authentication]
+      summary: Health check
+      responses:
+        "200":
+          description: API is responding
+  /api/auth/session:
+    get:
+      tags: [Authentication]
+      summary: Return the current session, if one exists
+      responses:
+        "200":
+          description: Current user or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    oneOf:
+                      - $ref: "#/components/schemas/Person"
+                      - type: "null"
+  /api/auth/dev-login:
+    post:
+      tags: [Authentication]
+      summary: Start a local demo session
+      description: Disabled unless the app is explicitly running in development mode.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [member, admin]
+      responses:
+        "200":
+          description: Session created and an HTTP-only cookie was set
+        "404":
+          description: Development sign-in is disabled
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Revoke the current session
+      responses:
+        "204":
+          description: Session revoked
+  /api/equipment:
+    get:
+      tags: [Equipment]
+      summary: List the equipment catalog
+      responses:
+        "200":
+          description: Equipment ordered by availability state and name
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Equipment"
+    post:
+      tags: [Equipment]
+      summary: Register equipment
+      security: [{ sessionCookie: [] }]
+      description: Administrator only. The equipment row and audit event commit atomically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EquipmentInput"
+      responses:
+        "201":
+          description: Equipment registered
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/equipment/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      tags: [Equipment]
+      summary: Get equipment details
+      responses:
+        "200":
+          description: Equipment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Equipment"
+        "404":
+          $ref: "#/components/responses/Problem"
+    patch:
+      tags: [Equipment]
+      summary: Update equipment fields or availability state
+      security: [{ sessionCookie: [] }]
+      description: Administrator only. Equipment with open reservations cannot be paused or retired.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/EquipmentInput"
+                - type: object
+                  required: [status]
+                  properties:
+                    status:
+                      type: string
+                      enum: [active, maintenance, retired]
+      responses:
+        "200":
+          description: Equipment updated
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/equipment/{id}/availability:
+    get:
+      tags: [Equipment]
+      summary: List occupied intervals within a requested period
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Busy intervals for pending, approved, and checked-out reservations
+  /api/reservations:
+    get:
+      tags: [Reservations]
+      summary: List the current user's reservations
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: scope
+          in: query
+          description: Set to all to list all users; administrator only.
+          schema:
+            type: string
+            enum: [all]
+      responses:
+        "200":
+          description: Reservations with equipment and requester labels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Reservation"
+        "403":
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [Reservations]
+      summary: Create a reservation
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 100
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [equipment_id, starts_at, ends_at, purpose]
+              properties:
+                equipment_id:
+                  type: string
+                  format: uuid
+                starts_at:
+                  type: string
+                  format: date-time
+                ends_at:
+                  type: string
+                  format: date-time
+                purpose:
+                  type: string
+                  minLength: 3
+                  maxLength: 280
+      responses:
+        "201":
+          description: Reservation created
+        "200":
+          description: Existing reservation returned for a matching idempotency key
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/reservations/{id}/cancel:
+    post:
+      tags: [Reservations]
+      summary: Cancel an unstarted reservation
+      description: Owner or administrator; pending and approved reservations only.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Reservation cancelled
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/reservations/{id}/approve:
+    post:
+      tags: [Reservations]
+      summary: Approve a pending reservation
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Reservation approved
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/reservations/{id}/reject:
+    post:
+      tags: [Reservations]
+      summary: Reject a pending reservation
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Reservation rejected
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/reservations/{id}/checkout:
+    post:
+      tags: [Reservations]
+      summary: Record equipment hand-off
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Reservation marked as checked out
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/reservations/{id}/return:
+    post:
+      tags: [Reservations]
+      summary: Record equipment return
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRequest"
+      responses:
+        "200":
+          description: Reservation marked as returned
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+  /api/audit:
+    get:
+      tags: [Audit]
+      summary: List the newest audit events
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: The 100 latest events, administrators only
+        "403":
+          $ref: "#/components/responses/Problem"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: gear_session
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Problem:
+      description: Consistent application/problem+json error
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Person:
+      type: object
+      required: [id, display_name, role]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        role: { type: string, enum: [member, admin] }
+    Equipment:
+      type: object
+      required: [id, asset_tag, name, category, description, location, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        asset_tag: { type: string }
+        name: { type: string }
+        category: { type: string }
+        description: { type: string }
+        location: { type: string }
+        status: { type: string, enum: [active, maintenance, retired] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EquipmentInput:
+      type: object
+      required: [asset_tag, name, category, description, location]
+      properties:
+        asset_tag: { type: string, minLength: 3, maxLength: 32 }
+        name: { type: string, minLength: 2, maxLength: 120 }
+        category: { type: string, minLength: 2, maxLength: 60 }
+        description: { type: string, maxLength: 1000 }
+        location: { type: string, minLength: 2, maxLength: 100 }
+    Reservation:
+      type: object
+      required: [id, equipment_id, user_id, starts_at, ends_at, purpose, status, version, created_at, updated_at, equipment_name, asset_tag, requester_name]
+      properties:
+        id: { type: string, format: uuid }
+        equipment_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        purpose: { type: string }
+        status: { type: string, enum: [pending, approved, checked_out, returned, rejected, cancelled] }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        equipment_name: { type: string }
+        asset_tag: { type: string }
+        requester_name: { type: string }
+    TransitionRequest:
+      type: object
+      properties:
+        note: { type: string, maxLength: 280 }
+    Problem:
+      type: object
+      required: [type, title, status, code, detail]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }

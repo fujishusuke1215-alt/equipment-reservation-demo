@@ -1,0 +1,13 @@
+.git
+.github
+.gitignore
+.dockerignore
+.env
+.env.*
+!.env.example
+target
+frontend/node_modules
+frontend/dist
+work
+outputs
+*.log

@@ -1,0 +1,46 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: equipment_reservation
+      POSTGRES_USER: gear
+      POSTGRES_PASSWORD: gear
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - gearline_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gear -d equipment_reservation"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://gear:gear@db:5432/equipment_reservation}
+      APP_ENV: ${APP_ENV:-development}
+      DEMO_AUTH_ENABLED: ${DEMO_AUTH_ENABLED:-true}
+      PORT: 8080
+      RUST_LOG: equipment_reservation_api=info,tower_http=info
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  gearline_pgdata:

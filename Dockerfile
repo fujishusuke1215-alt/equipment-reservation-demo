@@ -1,0 +1,30 @@
+FROM rust:1.100-bookworm AS api-builder
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+RUN cargo build --release --locked --bin equipment-reservation-api
+
+FROM node:24-alpine AS frontend-builder
+WORKDIR /web
+RUN npm install --global pnpm@11.25.0
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY frontend/ ./
+RUN pnpm build
+
+FROM debian:bookworm-slim AS api
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home app
+COPY --from=api-builder /app/target/release/equipment-reservation-api /usr/local/bin/equipment-reservation-api
+USER app
+ENV APP_ENV=production DEMO_AUTH_ENABLED=false PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["equipment-reservation-api"]
+
+FROM nginx:stable-alpine AS web
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=frontend-builder /web/dist/ /usr/share/nginx/html/
+EXPOSE 80
